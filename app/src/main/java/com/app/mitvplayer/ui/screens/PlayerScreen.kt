@@ -31,6 +31,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.Player
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.navigation.NavController
 import com.app.mitvplayer.data.models.Channel
@@ -75,9 +76,30 @@ fun PlayerScreen(
     var audioTracks by remember { mutableStateOf<List<TrackInfo>>(emptyList()) }
     var subtitleTracks by remember { mutableStateOf<List<TrackInfo>>(emptyList()) }
 
+    // Enhanced player state
+    var isFavorite by remember { mutableStateOf(false) }
+    var aspectRatioLabel by remember { mutableStateOf("Ajustar") }
+    var speedLabel by remember { mutableStateOf("1.0x") }
+    var qualityLabel by remember { mutableStateOf("") }
+
+    // PlayerView reference for aspect ratio changes
+    var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
+
     val context = LocalContext.current
     val playerManager = remember { TVPlayerManager(context) }
     val focusRequester = remember { FocusRequester() }
+
+    // Current channel
+    val currentChannel = channels.getOrNull(currentIndex)
+
+    // Check favorite status
+    LaunchedEffect(currentChannel?.id) {
+        currentChannel?.let { ch ->
+            viewModel.isFavorite(ch.id).collect { fav ->
+                isFavorite = fav
+            }
+        }
+    }
 
     // Setup error listener
     LaunchedEffect(Unit) {
@@ -99,11 +121,12 @@ fun PlayerScreen(
             isBuffering = true
             audioTracks = emptyList()
             subtitleTracks = emptyList()
+            qualityLabel = ""
             playerManager.playUrl(ch.url, ch.httpReferrer, ch.httpUserAgent)
         }
     }
 
-    // Update player state and tracks periodically
+    // Update player state, tracks, and quality periodically
     LaunchedEffect(Unit) {
         while (true) {
             val player = playerManager.player
@@ -116,6 +139,10 @@ fun PlayerScreen(
             if (player.playbackState == Player.STATE_READY) {
                 audioTracks = playerManager.getAudioTracks()
                 subtitleTracks = playerManager.getSubtitleTracks()
+
+                // Update quality info
+                val qi = playerManager.getVideoQualityInfo()
+                qualityLabel = qi.label
             }
 
             delay(500)
@@ -161,6 +188,39 @@ fun PlayerScreen(
         showOverlay = true
     }
     val goBack = { navController.popBackStack() }
+
+    val doToggleFavorite = {
+        currentChannel?.let { viewModel.toggleFavorite(it.id) }
+        showOverlay = true
+    }
+
+    val doCycleAspectRatio = {
+        val newMode = playerManager.cycleAspectRatio()
+        aspectRatioLabel = newMode.label
+        // Apply to PlayerView
+        playerViewRef?.let { pv ->
+            pv.resizeMode = when (newMode) {
+                TVPlayerManager.AspectRatioMode.FIT -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                TVPlayerManager.AspectRatioMode.FILL -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                TVPlayerManager.AspectRatioMode.RATIO_16_9 -> AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH
+                TVPlayerManager.AspectRatioMode.RATIO_4_3 -> AspectRatioFrameLayout.RESIZE_MODE_FIXED_HEIGHT
+            }
+        }
+        showOverlay = true
+    }
+
+    val doCycleSpeed = {
+        val newSpeed = playerManager.cycleSpeed()
+        speedLabel = "${newSpeed}x"
+        showOverlay = true
+    }
+
+    val doRetry = {
+        errorMessage = null
+        isBuffering = true
+        playerManager.retryCurrentChannel()
+        showOverlay = true
+    }
 
     Box(
         modifier = Modifier
@@ -222,6 +282,23 @@ fun PlayerScreen(
                             goBack()
                             true
                         }
+                        // New key bindings
+                        KeyEvent.KEYCODE_A -> {
+                            doCycleAspectRatio()
+                            true
+                        }
+                        KeyEvent.KEYCODE_S -> {
+                            doCycleSpeed()
+                            true
+                        }
+                        KeyEvent.KEYCODE_F -> {
+                            doToggleFavorite()
+                            true
+                        }
+                        KeyEvent.KEYCODE_R -> {
+                            doRetry()
+                            true
+                        }
                         else -> false
                     }
                 } else false
@@ -237,6 +314,7 @@ fun PlayerScreen(
                         FrameLayout.LayoutParams.MATCH_PARENT,
                         FrameLayout.LayoutParams.MATCH_PARENT
                     )
+                    playerViewRef = this
                 }
             },
             update = { view ->
@@ -246,8 +324,6 @@ fun PlayerScreen(
         )
 
         // Netflix-style overlay
-        val currentChannel = channels.getOrNull(currentIndex)
-
         AnimatedVisibility(
             visible = showOverlay || isBuffering || errorMessage != null,
             enter = fadeIn(),
@@ -266,6 +342,10 @@ fun PlayerScreen(
                 errorMessage = errorMessage,
                 audioTracks = audioTracks,
                 subtitleTracks = subtitleTracks,
+                isFavorite = isFavorite,
+                aspectRatioLabel = aspectRatioLabel,
+                speedLabel = speedLabel,
+                qualityLabel = qualityLabel,
                 onPlayPause = { togglePlay() },
                 onSeekBack = { seekBack() },
                 onSeekForward = { seekFwd() },
@@ -274,13 +354,16 @@ fun PlayerScreen(
                 onBack = { goBack() },
                 onSelectAudio = { track ->
                     playerManager.selectAudioTrack(track)
-                    // Refresh tracks after selection
                     audioTracks = playerManager.getAudioTracks()
                 },
                 onSelectSubtitle = { track ->
                     playerManager.selectSubtitleTrack(track)
                     subtitleTracks = playerManager.getSubtitleTracks()
-                }
+                },
+                onToggleFavorite = { doToggleFavorite() },
+                onCycleAspectRatio = { doCycleAspectRatio() },
+                onCycleSpeed = { doCycleSpeed() },
+                onRetry = { doRetry() }
             )
         }
     }

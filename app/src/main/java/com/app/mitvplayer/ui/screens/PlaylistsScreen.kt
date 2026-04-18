@@ -23,6 +23,8 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -72,6 +74,7 @@ fun PlaylistsScreen(
 ) {
     val playlists by viewModel.playlists.collectAsState()
     val refreshState by viewModel.refreshState.collectAsState()
+    val defaultPlaylistId by viewModel.defaultPlaylistId.collectAsState()
 
     Column(
         modifier = Modifier
@@ -201,6 +204,7 @@ fun PlaylistsScreen(
                     var showDeleteConfirm by remember { mutableStateOf(false) }
                     val isRefreshing = refreshState is PlaylistViewModel.RefreshState.Loading &&
                         (refreshState as PlaylistViewModel.RefreshState.Loading).playlistId == playlist.id
+                    val isDefault = defaultPlaylistId == playlist.id
 
                     if (showDeleteConfirm) {
                         DeleteConfirmDialog(
@@ -220,13 +224,21 @@ fun PlaylistsScreen(
                         lastUpdated = playlist.lastUpdatedAt,
                         hasUrl = !playlist.url.isNullOrBlank(),
                         isRefreshing = isRefreshing,
+                        isDefault = isDefault,
                         onClick = {
                             navController.navigate("playlist/${playlist.id}")
                         },
                         onRefresh = {
                             viewModel.refreshPlaylist(playlist.id)
                         },
-                        onDelete = { showDeleteConfirm = true }
+                        onDelete = { showDeleteConfirm = true },
+                        onToggleDefault = {
+                            if (isDefault) {
+                                viewModel.clearDefaultPlaylist()
+                            } else {
+                                viewModel.setDefaultPlaylist(playlist.id)
+                            }
+                        }
                     )
                 }
             }
@@ -242,9 +254,11 @@ private fun PlaylistCard(
     lastUpdated: Long,
     hasUrl: Boolean,
     isRefreshing: Boolean,
+    isDefault: Boolean,
     onClick: () -> Unit,
     onRefresh: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onToggleDefault: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
@@ -252,7 +266,12 @@ private fun PlaylistCard(
         label = "scale"
     )
     val borderColor by animateColorAsState(
-        targetValue = if (isFocused) PrimaryIndigo else Color.Transparent,
+        targetValue = when {
+            isDefault && isFocused -> Color(0xFFFFD700) // Gold
+            isFocused -> PrimaryIndigo
+            isDefault -> Color(0xFFFFD700).copy(alpha = 0.5f)
+            else -> Color.Transparent
+        },
         label = "border"
     )
     val bgColor by animateColorAsState(
@@ -283,7 +302,7 @@ private fun PlaylistCard(
             .fillMaxWidth()
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .border(
-                width = if (isFocused) 2.dp else 0.dp,
+                width = if (isFocused || isDefault) 2.dp else 0.dp,
                 color = borderColor,
                 shape = RoundedCornerShape(16.dp)
             )
@@ -306,22 +325,53 @@ private fun PlaylistCard(
                 .padding(horizontal = 24.dp, vertical = 20.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = Icons.Default.PlaylistPlay,
-                contentDescription = null,
-                tint = if (isFocused) PrimaryIndigoLight else TextGray,
-                modifier = Modifier.size(36.dp)
-            )
+            // Default star indicator
+            if (isDefault) {
+                Icon(
+                    imageVector = Icons.Default.Star,
+                    contentDescription = "Predeterminada",
+                    tint = Color(0xFFFFD700),
+                    modifier = Modifier.size(28.dp)
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.PlaylistPlay,
+                    contentDescription = null,
+                    tint = if (isFocused) PrimaryIndigoLight else TextGray,
+                    modifier = Modifier.size(36.dp)
+                )
+            }
+
             Spacer(modifier = Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = name,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = if (isFocused) PrimaryIndigoLight else TextWhite,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = name,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = if (isFocused) PrimaryIndigoLight else TextWhite,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (isDefault) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color(0xFFFFD700).copy(alpha = 0.2f)
+                            ),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                text = "PREDETERMINADA",
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFFFFD700),
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "$channelCount canales  •  $dateStr",
@@ -335,37 +385,59 @@ private fun PlaylistCard(
                 )
             }
 
-            // Refresh button for URL playlists
-            if (hasUrl && isFocused) {
-                if (isRefreshing) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        color = PrimaryIndigoLight,
-                        strokeWidth = 2.dp
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .background(
-                                PrimaryIndigo.copy(alpha = 0.3f),
-                                RoundedCornerShape(8.dp)
-                            )
-                            .dpadClickable(onClick = onRefresh),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = "Actualizar",
-                            tint = PrimaryIndigoLight,
-                            modifier = Modifier.size(20.dp)
+            // Actions on focus
+            if (isFocused) {
+                // Toggle default button
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(
+                            if (isDefault) Color(0xFFFFD700).copy(alpha = 0.3f)
+                            else PrimaryIndigo.copy(alpha = 0.3f),
+                            RoundedCornerShape(8.dp)
                         )
-                    }
+                        .dpadClickable(onClick = onToggleDefault),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = if (isDefault) Icons.Default.Star else Icons.Default.StarBorder,
+                        contentDescription = if (isDefault) "Quitar predeterminada" else "Fijar como predeterminada",
+                        tint = if (isDefault) Color(0xFFFFD700) else PrimaryIndigoLight,
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
                 Spacer(modifier = Modifier.width(8.dp))
-            }
 
-            if (isFocused) {
+                // Refresh button for URL playlists
+                if (hasUrl) {
+                    if (isRefreshing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            color = PrimaryIndigoLight,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(
+                                    PrimaryIndigo.copy(alpha = 0.3f),
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .dpadClickable(onClick = onRefresh),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Actualizar",
+                                tint = PrimaryIndigoLight,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+
                 Text(
                     text = "DEL borrar",
                     style = MaterialTheme.typography.labelSmall,

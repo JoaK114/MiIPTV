@@ -12,5 +12,6 @@ data class Playlist(
     val createdAt: Long = System.currentTimeMillis(),
     val epgUrl: String? = null,
     val lastUpdatedAt: Long = System.currentTimeMillis(),
-    val sourceType: String = "file" // "url" or "file"
+    val sourceType: String = "file", // "url" or "file"
+    val isDefault: Boolean = false
 )

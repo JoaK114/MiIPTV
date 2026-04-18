@@ -15,7 +15,11 @@ import androidx.room.PrimaryKey
             onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index("playlistId")]
+    indices = [
+        Index("playlistId"),
+        Index("contentType"),
+        Index("seriesName")
+    ]
 )
 data class Channel(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -29,5 +33,9 @@ data class Channel(
     val duration: Long = -1,
     val orderIndex: Int = 0,
     val httpReferrer: String? = null,
-    val httpUserAgent: String? = null
+    val httpUserAgent: String? = null,
+    val contentType: String = "tv",      // "tv", "movie", "series"
+    val seriesName: String? = null,       // Clean series name (e.g. "Breaking Bad")
+    val seasonNum: Int = 0,               // Season number
+    val episodeNum: Int = 0               // Episode number
 )

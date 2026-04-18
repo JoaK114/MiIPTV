@@ -8,7 +8,9 @@ import com.app.mitvplayer.data.AppDatabase
 import com.app.mitvplayer.data.M3UParser
 import com.app.mitvplayer.data.PlaylistRepository
 import com.app.mitvplayer.data.XtreamRepository
+import com.app.mitvplayer.data.dao.ContentTypeCount
 import com.app.mitvplayer.data.dao.GroupCount
+import com.app.mitvplayer.data.dao.SeriesInfo
 import com.app.mitvplayer.data.epg.EpgParser
 import com.app.mitvplayer.data.models.Channel
 import com.app.mitvplayer.data.models.EpgProgram
@@ -75,10 +77,120 @@ class PlaylistViewModel(application: Application) : AndroidViewModel(application
     private val _epgState = MutableStateFlow<EpgState>(EpgState.Idle)
     val epgState: StateFlow<EpgState> = _epgState
 
+    // ── Default Playlist ──
+    private val _defaultPlaylistId = MutableStateFlow<Long?>(null)
+    val defaultPlaylistId: StateFlow<Long?> = _defaultPlaylistId
+
+    private val _defaultPlaylist = MutableStateFlow<Playlist?>(null)
+    val defaultPlaylist: StateFlow<Playlist?> = _defaultPlaylist
+
+    // ── Content Type Counts ──
+    private val _contentTypeCounts = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val contentTypeCounts: StateFlow<Map<String, Int>> = _contentTypeCounts
+
+    // ── Series data ──
+    private val _seriesInfoList = MutableStateFlow<List<SeriesInfo>>(emptyList())
+    val seriesInfoList: StateFlow<List<SeriesInfo>> = _seriesInfoList
+
+    private val _seriesSeasons = MutableStateFlow<List<Int>>(emptyList())
+    val seriesSeasons: StateFlow<List<Int>> = _seriesSeasons
+
+    private val _seriesEpisodes = MutableStateFlow<List<Channel>>(emptyList())
+    val seriesEpisodes: StateFlow<List<Channel>> = _seriesEpisodes
+
     init {
         // Load locked groups on startup
         viewModelScope.launch(Dispatchers.IO) {
             _lockedGroups.value = db.parentalDao().getLockedGroupNames().toSet()
+        }
+        // Load default playlist on startup
+        viewModelScope.launch(Dispatchers.IO) {
+            val defaultPlaylist = repository.getDefaultPlaylist()
+            _defaultPlaylistId.value = defaultPlaylist?.id
+            _defaultPlaylist.value = defaultPlaylist
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // Default Playlist
+    // ═══════════════════════════════════════════════════════
+    fun setDefaultPlaylist(id: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.setDefaultPlaylist(id)
+            val playlist = repository.getPlaylistById(id)
+            _defaultPlaylistId.value = id
+            _defaultPlaylist.value = playlist
+        }
+    }
+
+    fun clearDefaultPlaylist() {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.clearDefaultPlaylist()
+            _defaultPlaylistId.value = null
+            _defaultPlaylist.value = null
+        }
+    }
+
+    fun isDefaultPlaylist(id: Long): Boolean = _defaultPlaylistId.value == id
+
+    // ═══════════════════════════════════════════════════════
+    // Content Type Counts (for tab badges)
+    // ═══════════════════════════════════════════════════════
+    fun loadContentTypeCounts(playlistId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val counts = repository.getContentTypeCounts(playlistId)
+            _contentTypeCounts.value = counts.associate { it.contentType to it.cnt }
+        }
+    }
+
+    fun getGroupsWithCountsByContentType(playlistId: Long, contentType: String): List<GroupCount> {
+        // This is called synchronously within a launched coroutine
+        var result = emptyList<GroupCount>()
+        // Use non-suspend approach via cached data or direct call
+        return result
+    }
+
+    fun loadGroupsForContentType(playlistId: Long, contentType: String, callback: (List<GroupCount>) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val groups = repository.getGroupsWithCountsByContentType(playlistId, contentType)
+            callback(groups)
+        }
+    }
+
+    fun getChannelsByContentTypeAndGroup(playlistId: Long, contentType: String, group: String): Flow<List<Channel>> =
+        repository.getChannelsByContentTypeAndGroup(playlistId, contentType, group)
+
+    // ═══════════════════════════════════════════════════════
+    // Series
+    // ═══════════════════════════════════════════════════════
+    fun loadSeriesInfo(playlistId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _seriesInfoList.value = repository.getSeriesInfoList(playlistId)
+        }
+    }
+
+    fun loadSeriesInfoForGroup(playlistId: Long, group: String, callback: (List<SeriesInfo>) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = repository.getSeriesInfoForGroup(playlistId, group)
+            callback(result)
+        }
+    }
+
+    fun loadSeriesSeasons(playlistId: Long, seriesName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _seriesSeasons.value = repository.getSeriesSeasons(playlistId, seriesName)
+        }
+    }
+
+    fun loadSeriesEpisodes(playlistId: Long, seriesName: String, season: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _seriesEpisodes.value = repository.getSeriesEpisodes(playlistId, seriesName, season)
+        }
+    }
+
+    fun loadAllSeriesEpisodes(playlistId: Long, seriesName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _seriesEpisodes.value = repository.getAllSeriesEpisodes(playlistId, seriesName)
         }
     }
 
@@ -87,20 +199,28 @@ class PlaylistViewModel(application: Application) : AndroidViewModel(application
     // ═══════════════════════════════════════════════════════
     fun importFromUrl(url: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            _importState.value = ImportState.Loading
+            _importState.value = ImportState.Loading("Conectando…", 0f)
             try {
                 val connection = java.net.URL(url).openConnection().apply {
                     connectTimeout = 15000
-                    readTimeout = 30000
+                    readTimeout = 60000
                     setRequestProperty("User-Agent", "MiTVPlayer/1.0")
                 }
+
+                _importState.value = ImportState.Loading("Descargando lista…", 0.1f)
                 val content = connection.getInputStream().bufferedReader().readText()
+
+                _importState.value = ImportState.Loading("Procesando canales…", 0.4f)
                 val result = M3UParser.parse(content)
 
                 if (result.channels.isEmpty()) {
                     _importState.value = ImportState.Error("No se encontraron canales en la lista")
                     return@launch
                 }
+
+                _importState.value = ImportState.Loading(
+                    "Guardando ${result.channels.size} canales…", 0.6f
+                )
 
                 val name = result.playlistName ?: extractNameFromUrl(url)
                 val playlistId = repository.importPlaylist(name, result, url)
@@ -125,7 +245,7 @@ class PlaylistViewModel(application: Application) : AndroidViewModel(application
 
     fun importFromContent(content: String, name: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            _importState.value = ImportState.Loading
+            _importState.value = ImportState.Loading("Procesando canales…", 0.2f)
             try {
                 val result = M3UParser.parse(content)
 
@@ -133,6 +253,10 @@ class PlaylistViewModel(application: Application) : AndroidViewModel(application
                     _importState.value = ImportState.Error("No se encontraron canales en el archivo")
                     return@launch
                 }
+
+                _importState.value = ImportState.Loading(
+                    "Guardando ${result.channels.size} canales…", 0.6f
+                )
 
                 val finalName = result.playlistName ?: name
                 val playlistId = repository.importPlaylist(finalName, result)
@@ -163,7 +287,7 @@ class PlaylistViewModel(application: Application) : AndroidViewModel(application
 
                 val connection = java.net.URL(playlist!!.url).openConnection().apply {
                     connectTimeout = 15000
-                    readTimeout = 30000
+                    readTimeout = 60000
                     setRequestProperty("User-Agent", "MiTVPlayer/1.0")
                 }
                 val content = connection.getInputStream().bufferedReader().readText()
@@ -236,6 +360,11 @@ class PlaylistViewModel(application: Application) : AndroidViewModel(application
 
     fun deletePlaylist(playlistId: Long) {
         viewModelScope.launch(Dispatchers.IO) {
+            // If deleting the default, clear default
+            if (_defaultPlaylistId.value == playlistId) {
+                _defaultPlaylistId.value = null
+                _defaultPlaylist.value = null
+            }
             repository.deletePlaylist(playlistId)
         }
     }
@@ -243,6 +372,8 @@ class PlaylistViewModel(application: Application) : AndroidViewModel(application
     fun deleteAllPlaylists() {
         viewModelScope.launch(Dispatchers.IO) {
             repository.deleteAllPlaylists()
+            _defaultPlaylistId.value = null
+            _defaultPlaylist.value = null
         }
     }
 
@@ -424,7 +555,7 @@ class PlaylistViewModel(application: Application) : AndroidViewModel(application
     // ═══════════════════════════════════════════════════════
     sealed class ImportState {
         object Idle : ImportState()
-        object Loading : ImportState()
+        data class Loading(val message: String, val progress: Float) : ImportState()
         data class Success(val playlistId: Long, val channelCount: Int) : ImportState()
         data class Error(val message: String) : ImportState()
     }

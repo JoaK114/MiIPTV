@@ -1,8 +1,10 @@
 package com.app.mitvplayer.data
 
 import com.app.mitvplayer.data.dao.ChannelDao
+import com.app.mitvplayer.data.dao.ContentTypeCount
 import com.app.mitvplayer.data.dao.GroupCount
 import com.app.mitvplayer.data.dao.PlaylistDao
+import com.app.mitvplayer.data.dao.SeriesInfo
 import com.app.mitvplayer.data.models.Channel
 import com.app.mitvplayer.data.models.Playlist
 import kotlinx.coroutines.flow.Flow
@@ -38,6 +40,60 @@ class PlaylistRepository(
 
     suspend fun searchChannels(playlistId: Long, query: String, limit: Int = 100): List<Channel> =
         channelDao.searchChannels(playlistId, query.lowercase(), limit)
+
+    // ═══════════════════════════════════════════════════════
+    // Default playlist
+    // ═══════════════════════════════════════════════════════
+
+    suspend fun getDefaultPlaylist(): Playlist? = playlistDao.getDefaultPlaylist()
+
+    suspend fun setDefaultPlaylist(id: Long) {
+        playlistDao.clearDefaultPlaylist()
+        playlistDao.setDefaultPlaylist(id)
+    }
+
+    suspend fun clearDefaultPlaylist() {
+        playlistDao.clearDefaultPlaylist()
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // Content type queries
+    // ═══════════════════════════════════════════════════════
+
+    suspend fun getContentTypeCounts(playlistId: Long): List<ContentTypeCount> =
+        channelDao.getContentTypeCounts(playlistId)
+
+    suspend fun getGroupsWithCountsByContentType(playlistId: Long, contentType: String): List<GroupCount> =
+        channelDao.getGroupsWithCountsByContentType(playlistId, contentType)
+
+    fun getChannelsByContentTypeAndGroup(playlistId: Long, contentType: String, group: String): Flow<List<Channel>> =
+        channelDao.getChannelsByContentTypeAndGroup(playlistId, contentType, group)
+
+    // ═══════════════════════════════════════════════════════
+    // Series queries
+    // ═══════════════════════════════════════════════════════
+
+    suspend fun getSeriesInfoList(playlistId: Long): List<SeriesInfo> =
+        channelDao.getSeriesInfoList(playlistId)
+
+    suspend fun getSeriesInfoForGroup(playlistId: Long, group: String): List<SeriesInfo> =
+        channelDao.getSeriesInfoForGroup(playlistId, group)
+
+    suspend fun getSeriesSeasons(playlistId: Long, seriesName: String): List<Int> =
+        channelDao.getSeriesSeasons(playlistId, seriesName)
+
+    suspend fun getSeriesEpisodes(playlistId: Long, seriesName: String, season: Int): List<Channel> =
+        channelDao.getSeriesEpisodes(playlistId, seriesName, season)
+
+    suspend fun getAllSeriesEpisodes(playlistId: Long, seriesName: String): List<Channel> =
+        channelDao.getAllSeriesEpisodes(playlistId, seriesName)
+
+    suspend fun getSeriesEpisodeCount(playlistId: Long, seriesName: String): Int =
+        channelDao.getSeriesEpisodeCount(playlistId, seriesName)
+
+    // ═══════════════════════════════════════════════════════
+    // Import & Refresh
+    // ═══════════════════════════════════════════════════════
 
     suspend fun importPlaylist(
         name: String,
@@ -103,12 +159,16 @@ class PlaylistRepository(
                 duration = parsed.duration,
                 orderIndex = index,
                 httpReferrer = parsed.httpReferrer,
-                httpUserAgent = parsed.httpUserAgent
+                httpUserAgent = parsed.httpUserAgent,
+                contentType = parsed.contentType,
+                seriesName = parsed.seriesName,
+                seasonNum = parsed.seasonNum,
+                episodeNum = parsed.episodeNum
             )
         }
 
-        // Insert in batches of 500 for large playlists
-        channels.chunked(500).forEach { batch ->
+        // Insert in batches of 1000 for large playlists (optimized for 50K+)
+        channels.chunked(1000).forEach { batch ->
             channelDao.insertChannels(batch)
         }
     }

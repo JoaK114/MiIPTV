@@ -5,12 +5,15 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,14 +26,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.Card
@@ -81,6 +90,12 @@ fun PlayerControls(
     errorMessage: String?,
     audioTracks: List<TrackInfo>,
     subtitleTracks: List<TrackInfo>,
+    // New props
+    isFavorite: Boolean = false,
+    aspectRatioLabel: String = "Ajustar",
+    speedLabel: String = "1.0x",
+    qualityLabel: String = "",
+    // Callbacks
     onPlayPause: () -> Unit,
     onSeekBack: () -> Unit,
     onSeekForward: () -> Unit,
@@ -89,6 +104,10 @@ fun PlayerControls(
     onBack: () -> Unit,
     onSelectAudio: (TrackInfo) -> Unit,
     onSelectSubtitle: (TrackInfo?) -> Unit,
+    onToggleFavorite: () -> Unit = {},
+    onCycleAspectRatio: () -> Unit = {},
+    onCycleSpeed: () -> Unit = {},
+    onRetry: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // Panel state: none, audio, subtitles
@@ -96,7 +115,7 @@ fun PlayerControls(
 
     Box(modifier = modifier.fillMaxSize()) {
         // ══════════════════════════════════════════════════
-        // TOP BAR — Channel info + Back button
+        // TOP BAR — Channel info + action buttons
         // ══════════════════════════════════════════════════
         Box(
             modifier = Modifier
@@ -154,7 +173,7 @@ fun PlayerControls(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Row {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = "Canal $channelNumber de $totalChannels",
                             style = MaterialTheme.typography.bodySmall,
@@ -167,10 +186,68 @@ fun PlayerControls(
                                 color = PrimaryIndigoLight
                             )
                         }
+                        // Quality badge
+                        if (qualityLabel.isNotBlank()) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Box(
+                                modifier = Modifier
+                                    .background(
+                                        color = PrimaryIndigo.copy(alpha = 0.3f),
+                                        shape = RoundedCornerShape(4.dp)
+                                    )
+                                    .padding(horizontal = 6.dp, vertical = 1.dp)
+                            ) {
+                                Text(
+                                    text = qualityLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = PrimaryIndigoLight,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
                     }
                 }
 
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+
+                // ── Action buttons row ──
+
+                // Favorite
+                ControlIconButton(
+                    icon = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    label = "Favorito",
+                    isActive = isFavorite,
+                    activeColor = ErrorRed,
+                    onClick = onToggleFavorite
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+
+                // Retry
+                ControlIconButton(
+                    icon = Icons.Default.Refresh,
+                    label = "Recargar",
+                    onClick = onRetry
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+
+                // Aspect ratio
+                ControlIconButton(
+                    icon = Icons.Default.AspectRatio,
+                    label = aspectRatioLabel,
+                    onClick = onCycleAspectRatio
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+
+                // Speed (only for VOD)
+                if (duration > 0) {
+                    ControlIconButton(
+                        icon = Icons.Default.Speed,
+                        label = speedLabel,
+                        onClick = onCycleSpeed
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                }
 
                 // Audio tracks button
                 if (audioTracks.size > 1) {
@@ -182,7 +259,7 @@ fun PlayerControls(
                             activePanel = if (activePanel == "audio") null else "audio"
                         }
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
                 }
 
                 // Subtitle button
@@ -203,7 +280,7 @@ fun PlayerControls(
         // CENTER — Buffering / Error / Play controls
         // ══════════════════════════════════════════════════
         if (errorMessage != null) {
-            // Error display
+            // Error display with retry button
             Card(
                 modifier = Modifier
                     .align(Alignment.Center)
@@ -226,6 +303,14 @@ fun PlayerControls(
                         text = errorMessage,
                         style = MaterialTheme.typography.bodyLarge,
                         color = TextWhite
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    // Retry button in error card
+                    ControlIconButton(
+                        icon = Icons.Default.Refresh,
+                        label = "Reintentar",
+                        size = 52,
+                        onClick = onRetry
                     )
                 }
             }
@@ -295,7 +380,7 @@ fun PlayerControls(
         }
 
         // ══════════════════════════════════════════════════
-        // BOTTOM BAR — Progress bar + time
+        // BOTTOM BAR — Progress bar + time + hints
         // ══════════════════════════════════════════════════
         Box(
             modifier = Modifier
@@ -338,6 +423,14 @@ fun PlayerControls(
                             style = MaterialTheme.typography.labelMedium,
                             color = TextGray
                         )
+                        // Speed indicator
+                        if (speedLabel != "1.0x") {
+                            Text(
+                                text = "Velocidad: $speedLabel",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = PrimaryIndigoLight
+                            )
+                        }
                         Text(
                             text = formatTime(duration),
                             style = MaterialTheme.typography.labelMedium,
@@ -346,7 +439,10 @@ fun PlayerControls(
                     }
                 } else {
                     // Live indicator
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
@@ -360,6 +456,14 @@ fun PlayerControls(
                             color = ErrorRed,
                             fontWeight = FontWeight.Bold
                         )
+                        Spacer(modifier = Modifier.weight(1f))
+                        // Keyboard shortcuts hint
+                        Text(
+                            text = "A:Aspecto  F:Favorito  R:Recargar",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextDimmed,
+                            fontSize = 10.sp
+                        )
                     }
                 }
             }
@@ -371,12 +475,13 @@ fun PlayerControls(
         AnimatedVisibility(
             visible = activePanel != null,
             modifier = Modifier.align(Alignment.CenterEnd),
-            enter = fadeIn(),
-            exit = fadeOut()
+            enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
+            exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut()
         ) {
             Card(
                 modifier = Modifier
-                    .width(280.dp)
+                    .width(300.dp)
+                    .fillMaxHeight(0.7f)
                     .padding(16.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = CardBackground.copy(alpha = 0.95f)
@@ -440,6 +545,7 @@ private fun ControlIconButton(
     label: String,
     size: Int = 40,
     isActive: Boolean = false,
+    activeColor: Color = PrimaryIndigo,
     onClick: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
@@ -448,7 +554,7 @@ private fun ControlIconButton(
     )
     val bgColor by animateColorAsState(
         targetValue = when {
-            isActive -> PrimaryIndigo
+            isActive -> activeColor
             isFocused -> PrimaryIndigo.copy(alpha = 0.4f)
             else -> Color.White.copy(alpha = 0.1f)
         },

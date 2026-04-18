@@ -626,4 +626,109 @@ class TVPlayerManager(private val context: Context) {
     }
 
     private var customBufferMs: Int = 2000
+
+    // ═══════════════════════════════════════════════════
+    // Aspect Ratio
+    // ═══════════════════════════════════════════════════
+    enum class AspectRatioMode(val label: String) {
+        FIT("Ajustar"),
+        FILL("Rellenar"),
+        RATIO_16_9("16:9"),
+        RATIO_4_3("4:3")
+    }
+
+    private var _aspectRatioMode = AspectRatioMode.FIT
+    val aspectRatioMode: AspectRatioMode get() = _aspectRatioMode
+
+    fun cycleAspectRatio(): AspectRatioMode {
+        val modes = AspectRatioMode.entries
+        val currentIndex = modes.indexOf(_aspectRatioMode)
+        _aspectRatioMode = modes[(currentIndex + 1) % modes.size]
+        return _aspectRatioMode
+    }
+
+    fun setAspectRatio(mode: AspectRatioMode) {
+        _aspectRatioMode = mode
+    }
+
+    // ═══════════════════════════════════════════════════
+    // Playback Speed
+    // ═══════════════════════════════════════════════════
+    private val speedOptions = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
+    private var _speedIndex = 2 // Default 1.0x
+
+    val currentSpeed: Float get() = speedOptions[_speedIndex]
+
+    fun cycleSpeed(): Float {
+        _speedIndex = (_speedIndex + 1) % speedOptions.size
+        player.setPlaybackSpeed(speedOptions[_speedIndex])
+        return speedOptions[_speedIndex]
+    }
+
+    fun setPlaybackSpeed(speed: Float) {
+        _speedIndex = speedOptions.indexOf(speed).takeIf { it >= 0 } ?: 2
+        player.setPlaybackSpeed(speed)
+    }
+
+    fun getSpeedOptions(): List<Float> = speedOptions
+
+    // ═══════════════════════════════════════════════════
+    // Retry current channel
+    // ═══════════════════════════════════════════════════
+    fun retryCurrentChannel() {
+        val url = currentUrl ?: return
+        resetFallbackState()
+        playUrl(url, currentReferrer, currentUserAgent)
+    }
+
+    // ═══════════════════════════════════════════════════
+    // Video quality info
+    // ═══════════════════════════════════════════════════
+    data class VideoQuality(
+        val width: Int = 0,
+        val height: Int = 0,
+        val bitrate: Int = 0,
+        val codec: String = "",
+        val label: String = ""
+    )
+
+    fun getVideoQualityInfo(): VideoQuality {
+        val videoFormat = player.videoFormat ?: return VideoQuality(label = "Desconocido")
+
+        val w = videoFormat.width
+        val h = videoFormat.height
+        val bitrate = videoFormat.bitrate
+        val codec = videoFormat.codecs ?: videoFormat.sampleMimeType ?: ""
+
+        val resLabel = when {
+            h >= 2160 -> "4K"
+            h >= 1440 -> "2K"
+            h >= 1080 -> "1080p"
+            h >= 720 -> "720p"
+            h >= 480 -> "480p"
+            h >= 360 -> "360p"
+            h > 0 -> "${h}p"
+            else -> "?"
+        }
+
+        val brLabel = when {
+            bitrate <= 0 -> ""
+            bitrate >= 1_000_000 -> "${bitrate / 1_000_000}.${(bitrate % 1_000_000) / 100_000} Mbps"
+            bitrate >= 1_000 -> "${bitrate / 1_000} Kbps"
+            else -> "$bitrate bps"
+        }
+
+        val fullLabel = buildString {
+            append(resLabel)
+            if (brLabel.isNotEmpty()) append(" • $brLabel")
+        }
+
+        return VideoQuality(
+            width = w,
+            height = h,
+            bitrate = bitrate,
+            codec = codec,
+            label = fullLabel
+        )
+    }
 }

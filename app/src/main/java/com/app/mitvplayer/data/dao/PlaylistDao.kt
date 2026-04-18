@@ -33,4 +33,15 @@ interface PlaylistDao {
 
     @Query("SELECT * FROM playlists ORDER BY createdAt DESC")
     suspend fun getAllPlaylistsSync(): List<Playlist>
+
+    // ── Default playlist management ──
+
+    @Query("SELECT * FROM playlists WHERE isDefault = 1 LIMIT 1")
+    suspend fun getDefaultPlaylist(): Playlist?
+
+    @Query("UPDATE playlists SET isDefault = 0")
+    suspend fun clearDefaultPlaylist()
+
+    @Query("UPDATE playlists SET isDefault = 1 WHERE id = :id")
+    suspend fun setDefaultPlaylist(id: Long)
 }

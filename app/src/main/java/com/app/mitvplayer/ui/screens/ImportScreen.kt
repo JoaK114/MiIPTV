@@ -26,17 +26,18 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -45,8 +46,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
@@ -75,6 +78,8 @@ fun ImportScreen(
     // 0 = options, 1 = URL input, 2 = file browser
     var currentView by remember { mutableIntStateOf(0) }
     var url by remember { mutableStateOf("") }
+    var showDefaultDialog by remember { mutableStateOf(false) }
+    var importedPlaylistId by remember { mutableStateOf<Long?>(null) }
     var hasStoragePermission by remember {
         mutableStateOf(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -84,6 +89,30 @@ fun ImportScreen(
                     context,
                     Manifest.permission.READ_EXTERNAL_STORAGE
                 ) == PackageManager.PERMISSION_GRANTED
+            }
+        )
+    }
+
+    // Show default dialog after successful import
+    val state = importState
+    if (state is PlaylistViewModel.ImportState.Success && !showDefaultDialog && importedPlaylistId == null) {
+        importedPlaylistId = state.playlistId
+        showDefaultDialog = true
+    }
+
+    // Default playlist dialog
+    if (showDefaultDialog && importedPlaylistId != null) {
+        DefaultPlaylistDialog(
+            onSetDefault = {
+                viewModel.setDefaultPlaylist(importedPlaylistId!!)
+                showDefaultDialog = false
+                // Navigate to the default playlist view
+                navController.navigate("default_playlist") {
+                    popUpTo("home") { inclusive = true }
+                }
+            },
+            onSkip = {
+                showDefaultDialog = false
             }
         )
     }
@@ -128,31 +157,39 @@ fun ImportScreen(
             enter = fadeIn(),
             exit = fadeOut()
         ) {
+            val loadingState = importState as? PlaylistViewModel.ImportState.Loading
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = PrimaryIndigo.copy(alpha = 0.15f)),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        color = PrimaryIndigoLight,
-                        strokeWidth = 2.dp
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = "Importando lista…",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = PrimaryIndigoLight
-                    )
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = PrimaryIndigoLight,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = loadingState?.message ?: "Importando lista…",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = PrimaryIndigoLight
+                        )
+                    }
+                    if (loadingState != null && loadingState.progress > 0f) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        LinearProgressIndicator(
+                            progress = { loadingState.progress },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = PrimaryIndigo,
+                            trackColor = PrimaryIndigo.copy(alpha = 0.2f),
+                        )
+                    }
                 }
             }
         }
 
-        val state = importState
         if (state is PlaylistViewModel.ImportState.Success) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -221,6 +258,7 @@ fun ImportScreen(
                 onUrlChange = { url = it },
                 onImport = {
                     if (url.isNotBlank()) {
+                        importedPlaylistId = null // Reset for new import
                         viewModel.importFromUrl(url.trim())
                     }
                 },
@@ -228,9 +266,67 @@ fun ImportScreen(
             )
             2 -> FileBrowser(
                 onFileSelected = { content ->
+                    importedPlaylistId = null // Reset for new import
                     viewModel.importFromContent(content, "Lista importada")
                 }
             )
+        }
+    }
+}
+
+@Composable
+private fun DefaultPlaylistDialog(
+    onSetDefault: () -> Unit,
+    onSkip: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.7f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = CardBackground),
+            shape = RoundedCornerShape(20.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(40.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Star,
+                    contentDescription = null,
+                    tint = Color(0xFFFFD700),
+                    modifier = Modifier.size(56.dp)
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "¿Usar como lista predeterminada?",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = TextWhite,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "La próxima vez que abras la app,\nse cargará automáticamente esta lista.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = TextGray,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    TVButton(
+                        text = "No, gracias",
+                        onClick = onSkip
+                    )
+                    TVButton(
+                        text = "Sí, predeterminar",
+                        icon = Icons.Default.Star,
+                        onClick = onSetDefault
+                    )
+                }
+            }
         }
     }
 }
