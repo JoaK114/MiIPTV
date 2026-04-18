@@ -24,8 +24,8 @@ class UpdateChecker(private val context: Context) {
 
     companion object {
         // TODO: Replace with actual repo after pushing to GitHub
-        private const val GITHUB_OWNER = "OWNER"
-        private const val GITHUB_REPO = "MiTVPlayer"
+        private const val GITHUB_OWNER = "JoaK114"
+        private const val GITHUB_REPO = "MiIPTV"
         private const val API_URL = "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases/latest"
     }
 
