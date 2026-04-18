@@ -2,6 +2,7 @@ package com.app.mitvplayer.player
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -21,6 +22,8 @@ import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.datasource.HttpDataSource
+
+private const val TAG = "TVPlayerManager"
 
 data class TrackInfo(
     val index: Int,
@@ -47,6 +50,24 @@ class TVPlayerManager(private val context: Context) {
     private var exoPlayer: ExoPlayer? = null
     private var errorListener: ((String) -> Unit)? = null
     private var trackSelector: DefaultTrackSelector? = null
+
+    // Fallback retry state
+    private var currentUrl: String? = null
+    private var currentReferrer: String? = null
+    private var currentUserAgent: String? = null
+    private var fallbackIndex: Int = 0
+    private var isRetrying: Boolean = false
+
+    /**
+     * Ordered list of stream types to try on container/parsing errors.
+     * HLS first because it's by far the most common IPTV format.
+     */
+    private val fallbackOrder = listOf(
+        StreamType.HLS,
+        StreamType.PROGRESSIVE,
+        StreamType.DASH,
+        StreamType.UNKNOWN
+    )
 
     private val httpDataSourceFactory = DefaultHttpDataSource.Factory()
         .setUserAgent("MiTVPlayer/1.0 (Android)")
@@ -92,6 +113,15 @@ class TVPlayerManager(private val context: Context) {
             .also { player ->
                 player.addListener(object : Player.Listener {
                     override fun onPlayerError(error: PlaybackException) {
+                        // Check if this is a container/parsing error that we can retry
+                        if (isRetryableError(error) && tryNextFallback()) {
+                            Log.d(TAG, "Retrying with fallback type ${fallbackOrder[fallbackIndex - 1]}")
+                            return
+                        }
+
+                        // Reset retry state since we've exhausted all options
+                        resetFallbackState()
+
                         // Try to extract HTTP status code from the cause chain
                         val httpStatusMessage = extractHttpStatusMessage(error)
 
@@ -100,10 +130,9 @@ class TVPlayerManager(private val context: Context) {
                                 "Error de conexión. Verifique su internet."
                             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ->
                                 "Tiempo de espera agotado."
-                            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED ->
-                                "Formato de video no soportado."
+                            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
                             PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ->
-                                "Contenedor de video no compatible."
+                                "Formato de video no compatible. Probados todos los formatos."
                             PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED ->
                                 "Error al leer el manifiesto del stream."
                             PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ->
@@ -130,6 +159,57 @@ class TVPlayerManager(private val context: Context) {
             }
     }
 
+    /**
+     * Check if the error is related to container parsing and can be retried
+     * with a different source type.
+     */
+    private fun isRetryableError(error: PlaybackException): Boolean {
+        return error.errorCode in listOf(
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+            PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE
+        )
+    }
+
+    /**
+     * Try the next fallback stream type. Returns true if a retry was started.
+     */
+    private fun tryNextFallback(): Boolean {
+        val url = currentUrl ?: return false
+
+        while (fallbackIndex < fallbackOrder.size) {
+            val nextType = fallbackOrder[fallbackIndex]
+            fallbackIndex++
+
+            // Skip RTSP — doesn't apply for HTTP URLs
+            // Skip the type that was already the detected type (already tried)
+            val detectedType = detectStreamType(url)
+            if (nextType == detectedType) continue
+
+            Log.d(TAG, "Fallback retry #$fallbackIndex: trying $nextType for URL: $url")
+            isRetrying = true
+
+            val dsFactory = buildDataSourceFactory(currentReferrer, currentUserAgent)
+            val mediaSource = buildMediaSourceForType(url, nextType, dsFactory)
+
+            player.apply {
+                stop()
+                setMediaSource(mediaSource)
+                prepare()
+                play()
+            }
+            return true
+        }
+
+        return false
+    }
+
+    private fun resetFallbackState() {
+        fallbackIndex = 0
+        isRetrying = false
+    }
+
     fun setOnErrorListener(listener: (String) -> Unit) {
         errorListener = listener
     }
@@ -138,7 +218,14 @@ class TVPlayerManager(private val context: Context) {
     // Playback controls
     // ═══════════════════════════════════════════════════
     fun playUrl(url: String, referrer: String? = null, userAgent: String? = null) {
-        val mediaSource = buildMediaSource(url.trim(), referrer, userAgent)
+        // Store for fallback retries
+        currentUrl = url.trim()
+        currentReferrer = referrer
+        currentUserAgent = userAgent
+        resetFallbackState()
+
+        val dsFactory = buildDataSourceFactory(referrer, userAgent)
+        val mediaSource = buildMediaSource(url.trim(), dsFactory)
         player.apply {
             stop()
             setMediaSource(mediaSource)
@@ -148,7 +235,8 @@ class TVPlayerManager(private val context: Context) {
     }
 
     /**
-     * Detect stream format from URL patterns
+     * Detect stream format from URL patterns.
+     * Includes Xtream Codes API pattern detection.
      */
     private fun detectStreamType(url: String): StreamType {
         val lower = url.lowercase()
@@ -184,9 +272,44 @@ class TVPlayerManager(private val context: Context) {
             path.endsWith(".3gp") || path.endsWith(".m4v") ||
             path.endsWith(".m4a") -> StreamType.PROGRESSIVE
 
+            // Xtream Codes API pattern: /live/username/password/channelId
+            // or /movie/username/password/movieId — these are almost always HLS
+            isXtreamCodesUrl(path) -> StreamType.HLS
+
+            // URLs with /live/ path commonly serve HLS in IPTV
+            lower.contains("/live/") -> StreamType.HLS
+
+            // URLs ending with a number (no extension) — common in IPTV, try HLS first
+            path.matches(Regex(".*/\\d+$")) -> StreamType.HLS
+
             // Unknown — let ExoPlayer try with content type sniffing
             else -> StreamType.UNKNOWN
         }
+    }
+
+    /**
+     * Detect Xtream Codes API URL patterns:
+     * /live/username/password/channelId[.ext]
+     * /movie/username/password/movieId[.ext]
+     * /series/username/password/episodeId[.ext]
+     */
+    private fun isXtreamCodesUrl(path: String): Boolean {
+        // Pattern: /(live|movie|series)/user/pass/id
+        val segments = path.trimStart('/').split('/')
+        if (segments.size >= 4) {
+            val firstSegment = segments[0]
+            if (firstSegment in listOf("live", "movie", "series")) {
+                return true
+            }
+        }
+        // Also match: /username/password/id (3-part pattern with numeric last segment)
+        if (segments.size == 3) {
+            val last = segments.last().split('.').first()
+            if (last.all { it.isDigit() }) {
+                return true
+            }
+        }
+        return false
     }
 
     /**
@@ -216,13 +339,14 @@ class TVPlayerManager(private val context: Context) {
         }
     }
 
-    private fun buildMediaSource(
-        url: String,
+    /**
+     * Build a data source factory with optional custom headers.
+     */
+    private fun buildDataSourceFactory(
         referrer: String? = null,
         userAgent: String? = null
-    ): MediaSource {
-        // Build data source factory (per-channel if custom headers)
-        val dsFactory = if (referrer != null || userAgent != null) {
+    ): DefaultDataSource.Factory {
+        return if (referrer != null || userAgent != null) {
             val customHttp = DefaultHttpDataSource.Factory()
                 .setUserAgent(userAgent ?: "MiTVPlayer/1.0 (Android)")
                 .setConnectTimeoutMs(15_000)
@@ -238,8 +362,29 @@ class TVPlayerManager(private val context: Context) {
         } else {
             dataSourceFactory
         }
+    }
 
+    /**
+     * Build media source with auto-detected stream type.
+     */
+    private fun buildMediaSource(
+        url: String,
+        dsFactory: DefaultDataSource.Factory
+    ): MediaSource {
         val streamType = detectStreamType(url)
+        Log.d(TAG, "Detected stream type: $streamType for URL: $url")
+        return buildMediaSourceForType(url, streamType, dsFactory)
+    }
+
+    /**
+     * Build media source for a specific stream type.
+     * Used both for initial playback and fallback retries.
+     */
+    private fun buildMediaSourceForType(
+        url: String,
+        streamType: StreamType,
+        dsFactory: DefaultDataSource.Factory
+    ): MediaSource {
         val mimeHint = getMimeTypeHint(url, streamType)
         val uri = Uri.parse(url)
 
@@ -249,6 +394,9 @@ class TVPlayerManager(private val context: Context) {
             mediaItemBuilder.setMimeType(mimeHint)
         }
         val mediaItem = mediaItemBuilder.build()
+
+        // For UNKNOWN type, build a MediaItem without MIME hint for auto-detection
+        val autoDetectItem = MediaItem.Builder().setUri(uri).build()
 
         return when (streamType) {
             StreamType.HLS -> {
@@ -280,7 +428,7 @@ class TVPlayerManager(private val context: Context) {
             StreamType.UNKNOWN -> {
                 // Let DefaultMediaSourceFactory auto-detect using content type sniffing
                 DefaultMediaSourceFactory(dsFactory)
-                    .createMediaSource(mediaItem)
+                    .createMediaSource(autoDetectItem)
             }
         }
     }
@@ -422,6 +570,10 @@ class TVPlayerManager(private val context: Context) {
         exoPlayer = null
         errorListener = null
         trackSelector = null
+        resetFallbackState()
+        currentUrl = null
+        currentReferrer = null
+        currentUserAgent = null
     }
 
     /**
@@ -455,7 +607,7 @@ class TVPlayerManager(private val context: Context) {
     fun setBufferDuration(bufferMs: Int) {
         val wasPlaying = exoPlayer?.isPlaying == true
         val currentPos = exoPlayer?.currentPosition ?: 0
-        val currentUrl = exoPlayer?.currentMediaItem?.localConfiguration?.uri?.toString()
+        val savedUrl = exoPlayer?.currentMediaItem?.localConfiguration?.uri?.toString()
 
         // Release old player
         exoPlayer?.stop()
@@ -467,8 +619,8 @@ class TVPlayerManager(private val context: Context) {
         customBufferMs = bufferMs
 
         // Restart if was playing
-        if (currentUrl != null && wasPlaying) {
-            playUrl(currentUrl)
+        if (savedUrl != null && wasPlaying) {
+            playUrl(savedUrl)
             player.seekTo(currentPos)
         }
     }
